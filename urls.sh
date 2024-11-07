@@ -1,22 +1,31 @@
 #!/bin/bash
 
+# Prompt for the target domain
+read -p "Enter the target domain (e.g., example.com): " domain
+
 # Check if httpx.txt exists
 if [[ ! -f "httpx.txt" ]]; then
     echo "Error: httpx.txt not found. Please make sure the httpx.txt file is available."
     exit 1
 fi
 
-# Step 1: Gather URLs with katana
+# Step 1: Gather URLs with katana and filter for the target domain
 echo "Gathering URLs with katana..."
-katana -list httpx.txt -o katana.txt
+katana -list httpx.txt -o katana_raw.txt
+grep "$domain" katana_raw.txt > katana.txt
+rm -f katana_raw.txt
 
-# Step 2: Gather URLs with waybackurls
+# Step 2: Gather URLs with waybackurls and filter for the target domain
 echo "Gathering URLs with waybackurls..."
-cat httpx.txt | waybackurls >> wayback.txt
+cat httpx.txt | waybackurls > wayback_raw.txt
+grep "$domain" wayback_raw.txt > wayback.txt
+rm -f wayback_raw.txt
 
-# Step 3: Gather URLs with gospider
+# Step 3: Gather URLs with gospider and filter for the target domain
 echo "Gathering URLs with gospider..."
-gospider -S httpx.txt | sed -n 's/.*\(https:\/\/[^ ]*\)]*.*/\1/p' >> gospider.txt
+gospider -S httpx.txt | sed -n 's/.*\(https:\/\/[^ ]*\)]*.*/\1/p' > gospider_raw.txt
+grep "$domain" gospider_raw.txt > gospider.txt
+rm -f gospider_raw.txt
 
 # Step 4: Combine all results into one file and remove duplicates
 echo "Combining all URLs and removing duplicates..."
