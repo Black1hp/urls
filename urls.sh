@@ -1,30 +1,36 @@
 #!/bin/bash
 
-# Prompt for the target domain
-read -p "Enter the target domain (e.g., example.com): " domain
+# Prompt user for file or single domain
+read -p "Enter the file name containing domains, or press Enter to search for a single domain: " file
 
-# Check if httpx.txt exists
-if [[ ! -f "httpx.txt" ]]; then
-    echo "Error: httpx.txt not found. Please make sure the httpx.txt file is available."
-    exit 1
+# Check if the user entered a file or a single domain
+if [[ -n "$file" && -f "$file" ]]; then
+    # Use the file with multiple domains
+    echo "Using domains from $file"
+    domain_source="$file"
+else
+    # Prompt for a single domain
+    read -p "Enter the domain to search for subdomains (e.g., example.com): " single_domain
+    echo "$single_domain" > single_domain.txt
+    domain_source="single_domain.txt"
 fi
 
 # Step 1: Gather URLs with katana and filter for the target domain
 echo "Gathering URLs with katana..."
-katana -list httpx.txt -o katana_raw.txt
-grep "$domain" katana_raw.txt > katana.txt
+katana -list "$domain_source" -o katana_raw.txt
+grep -f "$domain_source" katana_raw.txt > katana.txt
 rm -f katana_raw.txt
 
 # Step 2: Gather URLs with waybackurls and filter for the target domain
 echo "Gathering URLs with waybackurls..."
-cat httpx.txt | waybackurls > wayback_raw.txt
-grep "$domain" wayback_raw.txt > wayback.txt
+cat "$domain_source" | waybackurls > wayback_raw.txt
+grep -f "$domain_source" wayback_raw.txt > wayback.txt
 rm -f wayback_raw.txt
 
 # Step 3: Gather URLs with gospider and filter for the target domain
 echo "Gathering URLs with gospider..."
-gospider -S httpx.txt | sed -n 's/.*\(https:\/\/[^ ]*\)]*.*/\1/p' > gospider_raw.txt
-grep "$domain" gospider_raw.txt > gospider.txt
+gospider -S "$domain_source" | sed -n 's/.*\(https:\/\/[^ ]*\)]*.*/\1/p' > gospider_raw.txt
+grep -f "$domain_source" gospider_raw.txt > gospider.txt
 rm -f gospider_raw.txt
 
 # Step 4: Combine all results into one file and remove duplicates
@@ -84,7 +90,10 @@ echo "Fuzzing each domain for sensitive paths..."
 fuzz_results="fuzz_results.txt"
 > "$fuzz_results"  # Empty the file if it exists
 
-# Loop through each unique domain and fuzz for each path
+# Run httpx to collect accessible URLs for each domain
+httpx -list "$domain_source" -o httpx.txt
+
+# Loop through each unique domain in httpx.txt and fuzz for each path
 while IFS= read -r domain_url; do
     for path in "${paths[@]}"; do
         full_url="${domain_url}${path}"
@@ -92,6 +101,11 @@ while IFS= read -r domain_url; do
         httpx -silent -status-code -o "$fuzz_results" -mc 200,201,202,204,206,301,302,303,307,308 -path "$full_url"
     done
 done < httpx.txt
+
+# Cleanup
+if [[ "$domain_source" == "single_domain.txt" ]]; then
+    rm -f single_domain.txt
+fi
 
 # Completion message
 echo "All steps are complete. Results saved in allurls.txt, js.txt, php.txt, and fuzz_results.txt."
