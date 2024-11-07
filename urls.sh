@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Prompt user for a file with URLs or a single URL
+# Prompt for a file containing URLs or a single URL input
 read -p "Enter the file name containing URLs (from httpx), or press Enter to input a single URL: " file
 
 # Check if the user entered a file or a single URL
@@ -13,6 +13,19 @@ else
     url_source="single_url.txt"
 fi
 
+# Ask user whether to append to or delete existing results files if they exist
+for result_file in katana.txt wayback.txt gospider.txt allurls.txt js.txt php.txt fuzz_results.txt; do
+    if [[ -f $result_file ]]; then
+        read -p "File '$result_file' exists. Press Enter to append results, or type 'd' to delete and start fresh: " choice
+        if [[ $choice == 'd' ]]; then
+            rm "$result_file"
+            echo "Deleted $result_file."
+        else
+            echo "Appending to $result_file."
+        fi
+    fi
+done
+
 # Function to filter URLs by domain
 filter_urls() {
     local input_file="$1"
@@ -23,35 +36,35 @@ filter_urls() {
 # Step 1: Gather URLs with katana and filter by target domain(s)
 echo "Gathering URLs with katana..."
 katana -list "$url_source" -o katana_raw.txt 2>/dev/null
-filter_urls "katana_raw.txt" "$url_source" > katana.txt
+filter_urls "katana_raw.txt" "$url_source" >> katana.txt
 rm -f katana_raw.txt
 
 # Step 2: Gather URLs with waybackurls and filter by target domain(s)
 echo "Gathering URLs with waybackurls..."
 cat "$url_source" | waybackurls > wayback_raw.txt 2>/dev/null
-filter_urls "wayback_raw.txt" "$url_source" > wayback.txt
+filter_urls "wayback_raw.txt" "$url_source" >> wayback.txt
 rm -f wayback_raw.txt
 
 # Step 3: Gather URLs with gospider and filter by target domain(s)
 echo "Gathering URLs with gospider..."
 gospider -S "$url_source" | sed -n 's/.*\(https:\/\/[^ ]*\)]*.*/\1/p' > gospider_raw.txt 2>/dev/null
-filter_urls "gospider_raw.txt" "$url_source" > gospider.txt
+filter_urls "gospider_raw.txt" "$url_source" >> gospider.txt
 rm -f gospider_raw.txt
 
 # Step 4: Combine all results and remove duplicates
 echo "Combining URLs and removing duplicates..."
-cat katana.txt wayback.txt gospider.txt | anew > allurls.txt
+cat katana.txt wayback.txt gospider.txt | anew >> allurls.txt
 
 # Step 5: Extract JavaScript files
 echo "Extracting JavaScript files..."
-grep -E "\.js$" allurls.txt > js.txt
+grep -E "\.js$" allurls.txt >> js.txt
 
 # Step 6: Extract PHP files
 echo "Extracting PHP files..."
-grep -E "\.php$" allurls.txt > php.txt
+grep -E "\.php$" allurls.txt >> php.txt
 
-# Step 7: Fuzz each unique domain in `allurls.txt` for sensitive paths
-echo "Fuzzing each domain for sensitive paths..."
+# Step 7: Fuzz only the original URLs in the user-provided file for sensitive paths
+echo "Fuzzing each original URL for sensitive paths..."
 
 # List of common paths to check
 paths=(
@@ -93,16 +106,14 @@ paths=(
 
 # Create file to store fuzzing results
 fuzz_results="fuzz_results.txt"
-> "$fuzz_results"  # Clear file if it exists
 
-# Loop through each unique domain and fuzz for each path
+# Loop through each URL from the user input file and fuzz for each path
 while IFS= read -r url; do
-    base_url=$(echo "$url" | awk -F/ '{print $1 "//" $3}')
     for path in "${paths[@]}"; do
-        full_url="${base_url}${path}"
+        full_url="${url}${path}"
         httpx -silent -status-code -mc 200,201,202,204,206,301,302,303,307,308 -path "$full_url" >> "$fuzz_results" 2>/dev/null
     done
-done < allurls.txt
+done < "$url_source"
 
 # Cleanup
 if [[ "$url_source" == "single_url.txt" ]]; then
