@@ -1,40 +1,45 @@
 #!/bin/bash
 
-# Prompt user for file or single domain
-read -p "Enter the file name containing domains, or press Enter to search for a single domain: " file
+# Prompt user for a file with URLs or a single URL
+read -p "Enter the file name containing URLs (from httpx), or press Enter to input a single URL: " file
 
-# Check if the user entered a file or a single domain
+# Check if the user entered a file or a single URL
 if [[ -n "$file" && -f "$file" ]]; then
-    # Use the file with multiple domains
-    echo "Using domains from $file"
-    domain_source="$file"
+    echo "Using URLs from $file"
+    url_source="$file"
 else
-    # Prompt for a single domain
-    read -p "Enter the domain to search for subdomains (e.g., example.com): " single_domain
-    echo "$single_domain" > single_domain.txt
-    domain_source="single_domain.txt"
+    read -p "Enter a single URL (e.g., https://example.com): " single_url
+    echo "$single_url" > single_url.txt
+    url_source="single_url.txt"
 fi
 
-# Step 1: Gather URLs with katana and filter for the target domain
+# Function to filter URLs by domain
+filter_urls() {
+    local input_file="$1"
+    local domain_file="$2"
+    grep -f "$domain_file" "$input_file" || echo "No matching URLs found in $input_file."
+}
+
+# Step 1: Gather URLs with katana and filter by target domain(s)
 echo "Gathering URLs with katana..."
-katana -list "$domain_source" -o katana_raw.txt
-grep -f "$domain_source" katana_raw.txt > katana.txt
+katana -list "$url_source" -o katana_raw.txt 2>/dev/null
+filter_urls "katana_raw.txt" "$url_source" > katana.txt
 rm -f katana_raw.txt
 
-# Step 2: Gather URLs with waybackurls and filter for the target domain
+# Step 2: Gather URLs with waybackurls and filter by target domain(s)
 echo "Gathering URLs with waybackurls..."
-cat "$domain_source" | waybackurls > wayback_raw.txt
-grep -f "$domain_source" wayback_raw.txt > wayback.txt
+cat "$url_source" | waybackurls > wayback_raw.txt 2>/dev/null
+filter_urls "wayback_raw.txt" "$url_source" > wayback.txt
 rm -f wayback_raw.txt
 
-# Step 3: Gather URLs with gospider and filter for the target domain
+# Step 3: Gather URLs with gospider and filter by target domain(s)
 echo "Gathering URLs with gospider..."
-gospider -S "$domain_source" | sed -n 's/.*\(https:\/\/[^ ]*\)]*.*/\1/p' > gospider_raw.txt
-grep -f "$domain_source" gospider_raw.txt > gospider.txt
+gospider -S "$url_source" | sed -n 's/.*\(https:\/\/[^ ]*\)]*.*/\1/p' > gospider_raw.txt 2>/dev/null
+filter_urls "gospider_raw.txt" "$url_source" > gospider.txt
 rm -f gospider_raw.txt
 
-# Step 4: Combine all results into one file and remove duplicates
-echo "Combining all URLs and removing duplicates..."
+# Step 4: Combine all results and remove duplicates
+echo "Combining URLs and removing duplicates..."
 cat katana.txt wayback.txt gospider.txt | anew > allurls.txt
 
 # Step 5: Extract JavaScript files
@@ -45,7 +50,8 @@ grep -E "\.js$" allurls.txt > js.txt
 echo "Extracting PHP files..."
 grep -E "\.php$" allurls.txt > php.txt
 
-# Step 7: Fuzz each unique domain in httpx.txt for sensitive paths
+# Step 7: Fuzz each unique domain in `allurls.txt` for sensitive paths
+echo "Fuzzing each domain for sensitive paths..."
 
 # List of common paths to check
 paths=(
@@ -85,27 +91,23 @@ paths=(
     "/robots.txt"
 )
 
-# Create a file to store successful responses
-echo "Fuzzing each domain for sensitive paths..."
+# Create file to store fuzzing results
 fuzz_results="fuzz_results.txt"
-> "$fuzz_results"  # Empty the file if it exists
+> "$fuzz_results"  # Clear file if it exists
 
-# Run httpx to collect accessible URLs for each domain
-httpx -list "$domain_source" -o httpx.txt
-
-# Loop through each unique domain in httpx.txt and fuzz for each path
-while IFS= read -r domain_url; do
+# Loop through each unique domain and fuzz for each path
+while IFS= read -r url; do
+    base_url=$(echo "$url" | awk -F/ '{print $1 "//" $3}')
     for path in "${paths[@]}"; do
-        full_url="${domain_url}${path}"
-        # Use httpx to check each URL and log if successful
-        httpx -silent -status-code -o "$fuzz_results" -mc 200,201,202,204,206,301,302,303,307,308 -path "$full_url"
+        full_url="${base_url}${path}"
+        httpx -silent -status-code -mc 200,201,202,204,206,301,302,303,307,308 -path "$full_url" >> "$fuzz_results" 2>/dev/null
     done
-done < httpx.txt
+done < allurls.txt
 
 # Cleanup
-if [[ "$domain_source" == "single_domain.txt" ]]; then
-    rm -f single_domain.txt
+if [[ "$url_source" == "single_url.txt" ]]; then
+    rm -f single_url.txt
 fi
 
 # Completion message
-echo "All steps are complete. Results saved in allurls.txt, js.txt, php.txt, and fuzz_results.txt."
+echo "Script complete. Results saved in allurls.txt, js.txt, php.txt, and fuzz_results.txt."
