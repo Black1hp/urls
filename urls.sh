@@ -32,7 +32,7 @@ else
     url_source="single_url.txt"
 fi
 
-# Validate URL format in the input (basic check for http/https)
+# Validate URL format in the input
 while IFS= read -r url; do
     if [[ ! "$url" =~ ^https?:// ]]; then
         echo "Error: Invalid URL format in $url_source: $url (must start with http:// or https://)."
@@ -43,62 +43,121 @@ done < "$url_source"
 # Check for required tools
 check_tools
 
-# Ask user whether to append to or delete existing results files if they exist
+# Define fixed results files
 results_files=("katana.txt" "wayback.txt" "gospider.txt" "allurls.txt" "js.txt" "php.txt")
-for result_file in "${results_files[@]}"; do
-    if [[ -f "$result_file" ]]; then
-        read -p "File '$result_file' exists. Press Enter to append results, or type 'd' to delete and start fresh: " choice
-        if [[ "$choice" == 'd' ]]; then
-            rm "$result_file"
-            echo "Deleted $result_file."
-        else
-            echo "Appending to $result_file."
+
+# Ask user whether to append to or overwrite existing results files
+read -p "Append to existing results files or overwrite all? (a/o): " append_or_overwrite
+if [[ "$append_or_overwrite" == 'o' ]]; then
+    for file in "${results_files[@]}"; do
+        if [[ -f "$file" ]]; then
+            > "$file"
         fi
-    fi
-done
+    done
+    echo "Overwrote existing results files."
+else
+    echo "Appending to existing results files."
+fi
+
+# Additional options for bug hunters
+read -p "Do you want to extract additional file types? (y/n): " extract_files
+if [[ "$extract_files" == 'y' ]]; then
+    read -p "Enter additional file extensions to extract (comma-separated, e.g., json,xml): " extensions
+fi
+
+read -p "Do you want to extract URLs matching specific patterns? (y/n): " extract_patterns
+if [[ "$extract_patterns" == 'y' ]]; then
+    read -p "Enter patterns to extract (comma-separated, e.g., /admin,/api): " patterns
+fi
+
+read -p "Keep raw output files? (y/n): " keep_raw
+
+# Initialize array to track generated files
+generated_files=()
 
 # Function to filter URLs by domain
 filter_urls() {
     local input_file="$1"
     local domain_file="$2"
     local output_file="$3"
-    # Extract domains from URLs in domain_file and create a pattern for grep
     grep -oP '(?<=https?://)[^/]+' "$domain_file" | sort -u | while IFS= read -r domain; do
-        # Escape dots in domain for grep
         domain_escaped=$(echo "$domain" | sed 's/\./\\./g')
         grep -E "https?://$domain_escaped(/|$)" "$input_file"
     done >> "$output_file" || echo "No matching URLs found in $input_file."
 }
 
 # Step 1: Gather URLs with katana and filter by target domain(s)
-echo "Gathering URLs with katana..."
+echo "Starting URL gathering with katana..."
 katana -list "$url_source" -o katana_raw.txt -silent 2>/dev/null
+echo "Filtering katana URLs..."
 filter_urls "katana_raw.txt" "$url_source" "katana.txt"
-rm -f katana_raw.txt
+generated_files+=("katana.txt")
+if [[ "$keep_raw" == 'y' ]]; then
+    generated_files+=("katana_raw.txt")
+else
+    rm -f katana_raw.txt
+fi
 
 # Step 2: Gather URLs with waybackurls and filter by target domain(s)
-echo "Gathering URLs with waybackurls..."
+echo "Starting URL gathering with waybackurls..."
 cat "$url_source" | waybackurls > wayback_raw.txt 2>/dev/null
+echo "Filtering wayback URLs..."
 filter_urls "wayback_raw.txt" "$url_source" "wayback.txt"
-rm -f wayback_raw.txt
+generated_files+=("wayback.txt")
+if [[ "$keep_raw" == 'y' ]]; then
+    generated_files+=("wayback_raw.txt")
+else
+    rm -f wayback_raw.txt
+fi
 
 # Step 3: Gather URLs with gospider and filter by target domain(s)
-echo "Gathering URLs with gospider..."
+echo "Starting URL gathering with gospider..."
 gospider -S "$url_source" --no-color | grep -oP 'https?://[^ ]+' > gospider_raw.txt 2>/dev/null
+echo "Filtering gospider URLs..."
 filter_urls "gospider_raw.txt" "$url_source" "gospider.txt"
-rm -f gospider_raw.txt
+generated_files+=("gospider.txt")
+if [[ "$keep_raw" == 'y' ]]; then
+    generated_files+=("gospider_raw.txt")
+else
+    rm -f gospider_raw.txt
+fi
 
 # Step 4: Combine all results and remove duplicates
 echo "Combining URLs and removing duplicates..."
 cat katana.txt wayback.txt gospider.txt | sort -u | anew allurls.txt > /dev/null
+generated_files+=("allurls.txt")
 
 # Step 5: Extract JavaScript files
 echo "Extracting JavaScript files..."
 grep -E '\.js(\?.*)?$' allurls.txt | sort -u > js.txt
+generated_files+=("js.txt")
 
 # Step 6: Extract PHP files
 echo "Extracting PHP files..."
 grep -E '\.php(\?.*)?$' allurls.txt | sort -u > php.txt
+generated_files+=("php.txt")
+
+# Extract additional file types if specified
+if [[ "$extract_files" == 'y' ]]; then
+    IFS=',' read -ra ext_array <<< "$extensions"
+    for ext in "${ext_array[@]}"; do
+        echo "Extracting .$ext files..."
+        output_file="${ext}.txt"
+        grep -E "\.$ext(\?.*)?\$" allurls.txt | sort -u > "$output_file"
+        generated_files+=("$output_file")
+    done
+fi
+
+# Extract URLs matching specific patterns if specified
+if [[ "$extract_patterns" == 'y' ]]; then
+    IFS=',' read -ra pattern_array <<< "$patterns"
+    for pattern in "${pattern_array[@]}"; do
+        echo "Extracting URLs containing '$pattern'..."
+        output_file="${pattern//\//_}.txt"
+        grep -E "$pattern" allurls.txt | sort -u > "$output_file"
+        generated_files+=("$output_file")
+    done
+fi
 
 # Cleanup
 if [[ "$url_source" == "single_url.txt" ]]; then
@@ -107,7 +166,7 @@ fi
 
 # Completion message with summary
 echo "Script complete. Results saved in the following files:"
-for file in "${results_files[@]}"; do
+for file in "${generated_files[@]}"; do
     if [[ -f "$file" ]]; then
         line_count=$(wc -l < "$file")
         echo "  - $file: $line_count URLs"
